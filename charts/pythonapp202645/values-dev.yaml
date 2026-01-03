@@ -1,0 +1,5 @@
+replicaCount: 1
+image:
+  repository: mgsantos89/pythonapp202645
+  pullPolicy: IfNotPresent
+  tag: pythonapp202645-dev-latest

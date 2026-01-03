@@ -1,0 +1,96 @@
+name: pythonapp202645-cicd
+
+on:
+  push:
+    paths:
+      - src/**
+    branchs:
+      - main
+
+jobs:
+  ci:
+    outputs: 
+      commit_id: ${{ steps.vars.outputs.sha_short }}
+    runs-on: ubuntu-latest
+    steps:
+      - 
+        name: Set Short SHA
+        id: vars
+        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+      -
+        name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: mgsantos89/pythonapp202645:${{ steps.vars.outputs.sha_short }}
+  
+  cd:
+    needs: ci
+    runs-on: self-hosted
+    
+    steps:
+      - 
+        name: Clone repository 
+        uses: actions/checkout@v3
+
+      -
+        name: Modify values
+        shell: bash
+        run: |
+          echo ${{needs.ci.outputs.commit_id}}
+          sudo apt update
+          sudo apt install python3 python3-pip -y
+          pip install yq --break-system-packages
+          yq -Yi '.image.tag = "${{needs.ci.outputs.commit_id}}"' charts/pythonapp202645/values-dev.yaml
+                                
+      -
+        name: Commit Changes
+        uses: Endbug/add-and-commit@v9
+        with:
+          message: "Update values"
+      -
+        name: argo-cli install
+        shell: bash
+        run: |
+          curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd 
+
+      -
+        name: argocd login
+        shell: bash
+        run: |
+          argocd login ${{ secrets.ARGOCD_SERVER }} --insecure --username ${{ secrets.ARGOCD_USERNAME }} --password ${{ secrets.ARGOCD_PASSWORD }}
+
+
+      -
+        name: Ensure argocd repo and app
+        shell: bash
+        run : |
+
+          argocd repo list | grep -q 'https://github.com/MgtecnoInfoCloud/pythonapp202645.git' \
+          || argocd repo add https://github.com/MgtecnoInfoCloud/pythonapp202645.git
+
+
+          argocd app get pythonapp202645 || argocd app create pythonapp202645 \
+          --repo https://github.com/MgtecnoInfoCloud/pythonapp202645.git \
+          --path charts/pythonapp202645 --dest-namespace dev \
+          --dest-server https://kubernetes.default.svc \
+          --values values-dev.yaml --revision main \
+          --sync-policy manual --sync-option CreateNamespace=true
+
+
+
+
+      -
+        name: argocd sync app
+        shell: bash
+        run: |
+          argocd app sync pythonapp202645
+          argocd app wait pythonapp202645 --timeout 180
+
